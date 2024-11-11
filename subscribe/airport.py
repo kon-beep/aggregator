@@ -3,6 +3,7 @@
 # @Author  : wzdnzd
 # @Time    : 2022-07-15
 
+import base64
 import concurrent.futures
 import json
 import os
@@ -454,7 +455,7 @@ class AirPort:
             return []
 
         if self.sub.startswith(utils.FILEPATH_PROTOCAL):
-            self.sub = self.sub[len(utils.FILEPATH_PROTOCAL) - 1 :]
+            self.sub = self.sub[len(utils.FILEPATH_PROTOCAL) :]
             if not os.path.exists(self.sub) or not os.path.isfile(self.sub):
                 logger.error(f"[ParseError] file: {self.sub} not found")
                 return []
@@ -504,6 +505,13 @@ class AirPort:
                 name = item.get("name", "")
                 if utils.isblank(name) or name in unused_nodes:
                     continue
+
+                # JustMySocks节点，用主机名代替 IP 地址
+                if re.match(r"^JMS-\d+@[a-zA-Z0-9.]+:\d+$", name, flags=re.I):
+                    server = name.split("@", maxsplit=1)[1]
+                    hostname = utils.trim(server.split(":", maxsplit=1)[0]).lower()
+                    if re.match(r"^(\d+\.){3}\d+$", item.get("server", ""), flags=re.I):
+                        item["server"] = hostname
 
                 try:
                     if self.include and not re.search(self.include, name, re.I):
@@ -616,6 +624,14 @@ class AirPort:
             return []
 
     @staticmethod
+    def check_protocol(link: str) -> bool:
+        return re.match(
+            r"^(vmess|trojan|ss|ssr|vless|hysteria|hysteria2|tuic|snell)://[a-zA-Z0-9:.?+=@%&#_\-/]{10,}",
+            utils.trim(link).replace("\r", ""),
+            flags=re.I,
+        )
+
+    @staticmethod
     def decode(
         text: str, program: str, artifact: str = "", ignore: bool = False, special: bool = False, throw: bool = False
     ) -> list:
@@ -640,9 +656,10 @@ class AirPort:
         if not text:
             return []
 
+        is_b64encode, is_json = False, False
         if (
-            utils.isb64encode(text)
-            or (text.startswith("{") and text.endswith("}"))
+            (is_b64encode := utils.isb64encode(text))
+            or (is_json := (text.startswith("{") and text.endswith("}")))
             or not re.search(r"^proxies:([\s\r\n]+)?$", text, flags=re.MULTILINE)
         ):
             artifact = utils.trim(text=artifact)
@@ -651,6 +668,10 @@ class AirPort:
 
             v2ray_file = os.path.join(PATH, "subconverter", f"{artifact}.txt")
             clash_file = os.path.join(PATH, "subconverter", f"{artifact}.yaml")
+
+            # base64 encoding if all lines start with valid protocol
+            if not is_b64encode and not is_json and all(AirPort.check_protocol(x) for x in text.split("\n") if x):
+                text = base64.b64encode(text.encode(encoding="UTF8")).decode(encoding="UTF8")
 
             try:
                 with open(v2ray_file, "w+", encoding="UTF8") as f:
